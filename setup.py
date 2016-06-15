@@ -16,6 +16,7 @@
 
 from distutils.command.build import build
 from setuptools import setup, Extension
+from codecs import open
 
 import distutils.errors
 import distutils.ccompiler
@@ -55,6 +56,7 @@ def muted(*streams):
 
 
 def has_function(function_name, libraries=None):
+  """Checks if a given functions exists in the current platform."""
   compiler = distutils.ccompiler.new_compiler()
   with muted(sys.stdout, sys.stderr):
     result = compiler.has_function(
@@ -67,32 +69,39 @@ def has_function(function_name, libraries=None):
 class BuildCommand(build):
 
   user_options = build.user_options + [
-      ('static','s','build libyara statically into yara-python module'),
-      ('enable-cuckoo', None,'enable "cuckoo" module (use with --static)'),
-      ('enable-magic', None,'enable "magic" module (use with --static)'),
+      ('dynamic-linking', None,'link dynamically against libyara'),
+      ('enable-cuckoo', None,'enable "cuckoo" module'),
+      ('enable-magic', None,'enable "magic" module'),
       ('enable-profiling', None,'enable profiling features')]
 
   boolean_options = build.boolean_options + [
-      'static', 'enable-cuckoo', 'enable-magic', 'enable-profiling']
+      'dynamic', 'enable-cuckoo', 'enable-magic', 'enable-profiling']
 
   def initialize_options(self):
     build.initialize_options(self)
-    self.static = None
+    self.dynamic_linking = None
     self.enable_magic = None
     self.enable_cuckoo = None
     self.enable_profiling = None
 
   def finalize_options(self):
     build.finalize_options(self)
-    if self.enable_magic and not self.static:
+    if self.enable_magic and self.dynamic_linking:
       raise distutils.errors.DistutilsOptionError(
-          '--enable-magic must be used with --static')
-    if self.enable_cuckoo and not self.static:
+          '--enable-magic can''t be used with --dynamic-linking')
+    if self.enable_cuckoo and self.dynamic_linking:
       raise distutils.errors.DistutilsOptionError(
-          '--enable-cuckoo must be used with --static')
+          '--enable-cuckoo can''t be used with --dynamic-linking')
 
   def run(self):
-    sources = ['./yara-python.c']
+    """Execute the build command."""
+
+    base_dir = os.path.dirname(__file__)
+
+    if base_dir:
+      os.chdir(base_dir)
+
+    sources = ['yara-python.c']
     exclusions = ['yara/libyara/modules/pe_utils.c']
     libraries = ['yara']
     include_dirs = []
@@ -108,7 +117,14 @@ class BuildCommand(build):
       libraries.append('user32')
     else:
       building_for_windows = False
- 
+
+    if 'macosx' in self.plat_name:
+      building_for_osx = True
+      include_dirs.append('/opt/local/include')
+      library_dirs.append('/opt/local/lib')
+    else:
+      building_for_osx = False
+
     if has_function('memmem'):
       macros.append(('HAVE_MEMMEM', '1'))
     if has_function('strlcpy'):
@@ -119,7 +135,7 @@ class BuildCommand(build):
     if self.enable_profiling:
       macros.append(('PROFILING_ENABLED', '1'))
 
-    if self.static:
+    if not self.dynamic_linking:
       libraries.remove('yara')
       include_dirs.extend(['yara/libyara/include', 'yara/libyara/', '.'])
 
@@ -130,7 +146,7 @@ class BuildCommand(build):
       if building_for_windows:
         macros.append(('HASH', '1'))
         libraries.append('libeay%s' % bits)
-      elif (has_function('MD5_Init', libraries=['crypto']) and 
+      elif (has_function('MD5_Init', libraries=['crypto']) and
           has_function('SHA256_Init', libraries=['crypto'])):
         macros.append(('HASH', '1'))
         libraries.append('crypto')
@@ -171,9 +187,15 @@ class BuildCommand(build):
     build.run(self)
 
 
+with open('README.rst', 'r', 'utf-8') as f:
+  readme = f.read()
+
 setup(
     name='yara-python',
-    version='3.4.1',
+    version='3.4.0.0',
+    description='Python interface for YARA',
+    long_description=readme,
+    license='Apache 2.0',
     author='Victor M. Alvarez',
     author_email='plusvic@gmail.com;vmalvarez@virustotal.com',
     url='https://github.com/plusvic/yara-python',
